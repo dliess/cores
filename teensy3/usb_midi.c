@@ -57,7 +57,6 @@ void (*usb_midi_handleTimeCodeQuarterFrame)(uint16_t data) = NULL;
 #define TX_PACKET_LIMIT 6
 static usb_packet_t *rx_packet=NULL;
 static usb_packet_t *tx_packet=NULL;
-static uint8_t transmit_previous_timeout=0;
 static uint8_t tx_noautoflush=0;
 
 
@@ -89,36 +88,41 @@ static uint8_t tx_noautoflush=0;
 #endif
 
 
-void usb_midi_write_packed(uint32_t n)
+void usb_midi_write_event_packet(uint32_t eventPacket)
 {
-	uint32_t index, wait_count=0;
-
+    static uint8_t transmit_previous_timeout = 0;
+	uint32_t index, wait_count = 0;
 	tx_noautoflush = 1;
-	if (!tx_packet) {
-        	while (1) {
-                	if (!usb_configuration) {
-				//serial_print("error1\n");
-                        	return;
-                	}
-                	if (usb_tx_packet_count(MIDI_TX_ENDPOINT) < TX_PACKET_LIMIT) {
-                        	tx_packet = usb_malloc();
-                        	if (tx_packet) break;
-                	}
-                	if (++wait_count > TX_TIMEOUT || transmit_previous_timeout) {
-                        	transmit_previous_timeout = 1;
-				//serial_print("error2\n");
-                        	return;
-                	}
-                	yield();
-        	}
+	if(NULL == tx_packet)
+	{
+		while(1)
+		{
+			if (0 == usb_configuration)
+			{
+				return;
+			}
+			if (usb_tx_packet_count(MIDI_TX_ENDPOINT) < TX_PACKET_LIMIT)
+			{
+					tx_packet = usb_malloc();
+					if(NULL != tx_packet) break;
+			}
+			if (++wait_count > TX_TIMEOUT || transmit_previous_timeout)
+			{
+					transmit_previous_timeout = 1;
+					return;
+			}
+			yield();
+		}
 	}
 	transmit_previous_timeout = 0;
 	index = tx_packet->index;
-	//*((uint32_t *)(tx_packet->buf) + index++) = n;
-	((uint32_t *)(tx_packet->buf))[index++] = n;
-	if (index < MIDI_TX_SIZE/4) {
+	((uint32_t *)(tx_packet->buf))[index++] = eventPacket;
+	if (index < MIDI_TX_SIZE/sizeof(uint32_t))
+	{
 		tx_packet->index = index;
-	} else {
+	}
+	else
+	{
 		tx_packet->len = MIDI_TX_SIZE;
 		usb_tx(MIDI_TX_ENDPOINT, tx_packet);
 		tx_packet = usb_malloc();
@@ -126,27 +130,61 @@ void usb_midi_write_packed(uint32_t n)
 	tx_noautoflush = 0;
 }
 
+int usb_midi_read_event_packet(uint32_t* p_event_packet)
+{
+   // static usb_packet_t *rx_packet = NULL;
+	if (NULL == rx_packet)
+	{
+    	if(0 == usb_configuration) return 0;
+		rx_packet = usb_rx(MIDI_RX_ENDPOINT);
+		if(NULL == rx_packet)
+		{
+			return 0;
+		}
+		if(0 == rx_packet->len)
+		{
+			usb_free(rx_packet);
+			rx_packet = NULL;
+			return 0;
+		}
+	}
+	int index = rx_packet->index;
+	*p_event_packet = ((uint32_t *)rx_packet->buf)[index/sizeof(uint32_t)];
+	index += sizeof(uint32_t);
+	if(index < rx_packet->len)
+	{
+		rx_packet->index = index;
+	}
+	else
+	{
+		usb_free(rx_packet);
+		rx_packet = NULL; //TODO: there was asb_malloc() here before, analyze impact
+	}
+	return 1;
+}
+
+
 void usb_midi_send_sysex(const uint8_t *data, uint32_t length)
 {
         // TODO: MIDI 2.5 lib automatically adds start and stop bytes
         while (length > 3) {
-                usb_midi_write_packed(0x04 | (data[0] << 8) | (data[1] << 16) | (data[2] << 24));
+                usb_midi_write_event_packet(0x04 | (data[0] << 8) | (data[1] << 16) | (data[2] << 24));
                 data += 3;
                 length -= 3;
         }
         if (length == 3) {
-                usb_midi_write_packed(0x07 | (data[0] << 8) | (data[1] << 16) | (data[2] << 24));
+                usb_midi_write_event_packet(0x07 | (data[0] << 8) | (data[1] << 16) | (data[2] << 24));
         } else if (length == 2) {
-                usb_midi_write_packed(0x06 | (data[0] << 8) | (data[1] << 16));
+                usb_midi_write_event_packet(0x06 | (data[0] << 8) | (data[1] << 16));
         } else if (length == 1) {
-                usb_midi_write_packed(0x05 | (data[0] << 8));
+                usb_midi_write_event_packet(0x05 | (data[0] << 8));
         }
 }
 
 void usb_midi_flush_output(void)
 {
 	if (tx_noautoflush == 0 && tx_packet && tx_packet->index > 0) {
-		tx_packet->len = tx_packet->index * 4;
+		tx_packet->len = tx_packet->index * sizeof(uint32_t);
 		usb_tx(MIDI_TX_ENDPOINT, tx_packet);
 		tx_packet = usb_malloc();
 	}
@@ -171,29 +209,11 @@ int usb_midi_read(uint32_t channel)
 {
 	uint32_t n, index, ch, type1, type2;
 
-	if (!rx_packet) {
-		if (!usb_configuration) return 0;
-		rx_packet = usb_rx(MIDI_RX_ENDPOINT);
-		if (!rx_packet) return 0;
-		if (rx_packet->len == 0) {
-			usb_free(rx_packet);
-			rx_packet = NULL;
-			return 0;
-		}
+	if(!usb_midi_read_event_packet(&n))
+	{
+		return 0;
 	}
-	index = rx_packet->index;
-	//n = *(uint32_t *)(rx_packet->buf + index);
-	n = ((uint32_t *)rx_packet->buf)[index/4];
-	//serial_print("midi rx, n=");
-	//serial_phex32(n);
-	//serial_print("\n");
-	index += 4;
-	if (index < rx_packet->len) {
-		rx_packet->index = index;
-	} else {
-		usb_free(rx_packet);
-		rx_packet = usb_rx(MIDI_RX_ENDPOINT);
-	}
+
 	type1 = n & 15;
 	type2 = (n >> 12) & 15;
 	ch = ((n >> 8) & 15) + 1;

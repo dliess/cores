@@ -62,7 +62,9 @@ used together without conflict.
 #ifdef __cplusplus
 extern "C" {
 #endif
-void usb_midi_write_packed(uint32_t n);
+void usb_midi_write_event_packet(uint32_t event_packet);
+int usb_midi_read_event_packet(uint32_t* p_event_packet);
+
 void usb_midi_send_sysex(const uint8_t *data, uint32_t length);
 void usb_midi_flush_output(void);
 int usb_midi_read(uint32_t channel);
@@ -95,31 +97,31 @@ class usb_midi_class
         void begin(void) { }
         void end(void) { }
         void sendNoteOff(uint32_t note, uint32_t velocity, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0x8008 | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0x8008 | (((channel - 1) & 0x0F) << 8)
 		  | ((note & 0x7F) << 16) | ((velocity & 0x7F) << 24));
 	}
         void sendNoteOn(uint32_t note, uint32_t velocity, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0x9009 | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0x9009 | (((channel - 1) & 0x0F) << 8)
 		  | ((note & 0x7F) << 16) | ((velocity & 0x7F) << 24));
 	}
         void sendPolyPressure(uint32_t note, uint32_t pressure, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xA00A | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0xA00A | (((channel - 1) & 0x0F) << 8)
 		  | ((note & 0x7F) << 16) | ((pressure & 0x7F) << 24));
 	}
         void sendControlChange(uint32_t control, uint32_t value, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xB00B | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0xB00B | (((channel - 1) & 0x0F) << 8)
 		  | ((control & 0x7F) << 16) | ((value & 0x7F) << 24));
 	}
         void sendProgramChange(uint32_t program, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xC00C | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0xC00C | (((channel - 1) & 0x0F) << 8)
 		  | ((program & 0x7F) << 16));
 	}
         void sendAfterTouch(uint32_t pressure, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xD00D | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0xD00D | (((channel - 1) & 0x0F) << 8)
 		  | ((pressure & 0x7F) << 16));
 	}
         void sendPitchBend(uint32_t value, uint32_t channel) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xE00E | (((channel - 1) & 0x0F) << 8)
+		usb_midi_write_event_packet(0xE00E | (((channel - 1) & 0x0F) << 8)
 		  | ((value & 0x7F) << 16) | ((value & 0x3F80) << 17));
 	}
         void sendSysEx(uint32_t length, const uint8_t *data) {
@@ -133,7 +135,7 @@ class usb_midi_class
 			case 0xFB: // Continue
 			case 0xFE: // ActiveSensing
 			case 0xFF: // SystemReset
-				usb_midi_write_packed((type << 8) | 0x0F);
+				usb_midi_write_event_packet((type << 8) | 0x0F);
 				break;
 			default: // Invalid Real Time marker
 				break;
@@ -144,7 +146,7 @@ class usb_midi_class
 		sendTimeCodeQuarterFrame(data);	
 	}
         void sendTimeCodeQuarterFrame(uint32_t data) __attribute__((always_inline)) {
-		usb_midi_write_packed(0xF108 | ((data & 0x7F) << 16));
+		usb_midi_write_event_packet(0xF108 | ((data & 0x7F) << 16));
 	}
         void send_now(void) {
 		usb_midi_flush_output();
